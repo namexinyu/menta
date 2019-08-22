@@ -1,0 +1,168 @@
+import React from "react";
+import { homeStore } from "../store";
+import { inject, observer } from "mobx-react";
+import { Switch, Route, Redirect } from 'react-router-dom';
+import Loadable from "react-loadable";
+import ExceptionPage from './exception';
+import basename from '../config/basename';
+import { toJS } from "mobx";
+
+const { tabSave, tabOut } = homeStore;
+
+const Home = Loadable({
+  loader: () => import('./Home'),
+  loading: () => ('')
+});
+
+@inject('authStore')
+@observer
+class PagesIndex extends React.Component {
+  componentDidMount() {
+    const homeRoute = homeStore.homeRoute;
+    const pathname = this.props.location.pathname;
+    if (pathname === '/' || pathname === '/404') {
+      console.log('1')
+      homeRoute.indexPage && homeRoute.indexPage.path && this.props.history.push(homeRoute.indexPage.path);
+    }
+  }
+
+
+  onLoadResources = () => {
+    const homeRoute = homeStore.homeRoute;
+    const pathname = this.props.location.pathname;
+    if (pathname === '/' || pathname === '/404') {
+      console.log('2')
+      if (homeRoute.authRoute && homeRoute.authRoute.path !== this.props.location.pathname) {
+        this.props.history.push(homeRoute.authRoute.path);
+      }
+    }
+  };
+
+  onException() {
+    homeStore.tabActiveKey = '';
+  }
+
+  render() {
+    const { isLogin } = this.props.authStore;
+    const homeRoute = homeStore.homeRoute;
+
+    const authLink = homeRoute.authRoute && homeRoute.authRoute.path && {
+      to: homeRoute.authRoute.path,
+      href: basename + homeRoute.authRoute.path
+    };
+    const indexLink = homeRoute.indexPage && homeRoute.indexPage.path ? {
+      to: homeRoute.indexPage.path,
+      href: basename + homeRoute.indexPage.path
+    } : authLink;
+    console.log(toJS(homeRoute), 'homeRoute')
+    console.log(homeRoute);
+    return isLogin ?
+      <Home homeStore={homeStore} hideTabView={this.props.location.pathname === '/404'}
+        onLoadResources={this.onLoadResources}>
+        <Switch>
+          {homeRoute.children.map(route => {
+            return (
+              <Route key={route.path}
+                path={route.path}
+                exact={route.exact || true}
+                component={route.component}
+              />
+            );
+          }
+          )}
+          <Route path='/404' render={props =>
+            React.createElement('div', { className: 'not-found' }, React.createElement(ExceptionPage, {
+              type: '404',
+              actions: indexLink ? undefined : <span />,
+              linkObject: indexLink,
+              onException: this.onException
+            }))
+          } />
+          <Redirect to='/404' />
+        </Switch>
+      </Home> :
+      <Redirect to={{ pathname: '/login', state: { from: this.props.location } }} />;
+  }
+}
+export default PagesIndex;
+// 可以通过decorators或者func
+export function tabWrap(tabParam) {
+  const getKey = (location) => location.pathname + location.search; // todo fix deadCode
+
+  function WrappedComponent(component, param) {
+    if (!component.prototype || !component.prototype.isReactComponent) return;
+    return class extends React.Component {
+
+      constructor(props) {
+        super(props);
+        let tabKey = getKey(props.location);
+        this.addTab(this.props, getKey(this.props.location));
+        this.state = { tabKey, props: this.props, nTabKey: tabKey };
+      }
+
+      static getDerivedStateFromProps(nextProps, prevState) {
+        let nTabKey = getKey(nextProps.location);
+        if (prevState.tabKey !== nTabKey) {
+          return { nTabKey };
+        }
+        return null;
+      }
+
+      componentDidUpdate(prevProps, prevState, snapshot) {
+        let tabKey = this.state.nTabKey;
+        if (this.state.tabKey === -1) {
+          this.addTab(this.props, tabKey);
+          this.setState({ tabKey: this.state.nTabKey, props: this.props });
+        } else if (tabKey && tabKey !== prevState.nTabKey) {
+          tabOut(prevState.tabKey);
+          this.setState({ tabKey: -1 });
+        }
+      }
+
+      componentWillUnmount() {
+        tabOut(this.state.tabKey);
+      }
+
+      render = () => this.state.tabKey === -1 ? null :
+        React.createElement(component, {
+          ...this.state.props,
+          key: this.state.tabKey
+        });
+
+      addTab = (props, tabKey) => {
+        if (!tabKey) return;
+        let paramT = typeof param;
+        let tabName;
+        let tabItem = {};
+        switch (paramT) {
+          case 'string':
+            tabName = param;
+            break;
+          case 'object':
+            let tName = param.tabName;
+            if (typeof tName === 'string') {
+              tabName = tName;
+            } else if (typeof tName === 'function') {
+              tabName = tName(props);
+            }
+            tabItem = { ...param };
+            break;
+          case 'function':
+            tabName = param(props);
+            break;
+          default:
+            throw new Error('tabWrap first param can only be a string/object/function');
+        }
+        if (!tabName) throw new Error('tabWrap first param can only be a string/object/function that specifies a tabName');
+        // delete tabItem.tabId;
+        delete tabItem.tabName;
+        tabSave({ tabKey, tabName, ...tabItem });
+      };
+    };
+  }
+
+  if (tabParam.prototype && tabParam.prototype.isReactComponent) {
+    return WrappedComponent(tabParam);
+  }
+  return (component) => WrappedComponent(component, tabParam);
+}
